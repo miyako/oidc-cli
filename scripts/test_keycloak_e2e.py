@@ -1,12 +1,31 @@
 import json
 from pathlib import Path
 import unittest
+import urllib.error
 import urllib.request
 
-from keycloak_e2e import CALLBACK, LoginForm, LocalRedirects
+from keycloak_e2e import CALLBACK, CheckFailed, LoginForm, LocalRedirects, check_result, failure_reason
 
 
 class BrowserTests(unittest.TestCase):
+    def test_failure_diagnostics_do_not_echo_sensitive_data(self):
+        secret = "sensitive-token-or-url"
+        for error in (
+            ValueError(secret), CheckFailed(secret),
+            urllib.error.HTTPError(secret, 400, secret, {}, None),
+        ):
+            self.assertNotIn(secret, failure_reason(error))
+        self.assertEqual(failure_reason(CheckFailed("token_invalid")), "CLI returned token_invalid")
+        self.assertEqual(
+            failure_reason(urllib.error.HTTPError(secret, 400, secret, {}, None)), "HTTP 400"
+        )
+
+    def test_cli_errors_are_allowlisted_for_diagnostics(self):
+        for code in ("token_invalid", "sensitive-token"):
+            with self.subTest(code=code), self.assertRaises(CheckFailed) as raised:
+                check_result({"ok": False, "error": {"code": code}}, 3)
+            self.assertNotIn("sensitive-token", failure_reason(raised.exception))
+
     def test_fixture_registers_exact_callback(self):
         fixture = Path(__file__).resolve().parents[1] / "testdata/keycloak/realm.json"
         realm = json.loads(fixture.read_text())
