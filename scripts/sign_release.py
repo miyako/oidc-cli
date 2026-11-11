@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import tarfile
 import tempfile
+import time
 import uuid
 import zipfile
 
@@ -33,6 +34,8 @@ TOOL_FAILURE_LABELS = (
     "unable to build chain to self-signed root", "CSSMERR_TP_NOT_TRUSTED",
     "The specified item could not be found in the keychain",
     "timestamp service is not available", "resource fork",
+    "failed to satisfy specified code requirement", "code object is not signed at all",
+    "notarization ticket", "not notarized",
 )
 
 
@@ -90,8 +93,16 @@ def verify_binary(path, target, team, *, notarized=False):
     args = ["/usr/bin/codesign", "--verify", "--strict", "--all-architectures"]
     if notarized:
         args += ["--check-notarization", "--test-requirement", "notarized"]
-    run_tool("notarized signature verification" if notarized else "signature verification",
-             [*args, path])
+    for attempt in range(4 if notarized else 1):
+        try:
+            run_tool("notarized signature verification" if notarized else "signature verification",
+                     [*args, path])
+            break
+        except SigningError:
+            if not notarized or attempt == 3:
+                raise
+            print("Online notarization check not yet successful; retrying.", flush=True)
+            time.sleep(15)
     for architecture in ARCHITECTURES[target]:
         display = run_tool("signature inspection", [
             "/usr/bin/codesign", "--display", "--verbose=4", "--arch", architecture, path,
@@ -188,6 +199,7 @@ def sign_and_notarize(binaries):
                 "--keychain-profile", "oidc-cli", "--keychain", keychain,
                 "--wait", "--timeout", "20m", "--output-format", "json",
             ], timeout=1260, stdout_only=True))
+            print("Apple notarization Accepted (submission " + identifier + ").", flush=True)
             for target, binary in sorted(binaries.items()):
                 verify_binary(binary, target, team, notarized=True)
             return {

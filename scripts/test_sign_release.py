@@ -24,6 +24,21 @@ DISPLAY = (
 
 
 class SigningTests(unittest.TestCase):
+    def test_notary_ticket_checks_retry_but_never_fall_back(self):
+        with mock.patch.object(signing.time, "sleep") as sleep, \
+                mock.patch.object(signing, "run_tool", side_effect=[
+                    signing.SigningError("pending"), "", DISPLAY,
+                ]):
+            signing.verify_binary(Path("fixture"), "darwin_arm64", TEAM, notarized=True)
+            sleep.assert_called_once_with(15)
+        with mock.patch.object(signing.time, "sleep") as sleep, \
+                mock.patch.object(signing, "run_tool",
+                                  side_effect=signing.SigningError("unavailable")) as run:
+            with self.assertRaises(signing.SigningError):
+                signing.verify_binary(Path("fixture"), "darwin_arm64", TEAM, notarized=True)
+            self.assertEqual(run.call_count, 4)
+            self.assertEqual(sleep.call_count, 3)
+
     def test_final_archive_preserves_signed_bytes_and_is_verified(self):
         from package_release import archive_bytes
 

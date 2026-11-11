@@ -107,7 +107,8 @@ notarization team. No ad-hoc or Apple Development identity is accepted.
 The signed binaries are submitted together in a temporary ZIP to Apple's notary
 service with a bounded 20-minute wait. After `Accepted`, every architecture must
 pass signature inspection and an online `codesign --check-notarization`
-verification with the `notarized` requirement. Only then are the final archives
+verification with the `notarized` requirement (up to four bounded attempts for
+ticket propagation, with no unsigned fallback). Only then are the final archives
 written. Their extracted executables are checked again against the signed
 binary hashes, Developer ID signatures and notarization, before checksums are
 generated. A signature is embedded in the executable, not an archive attribute.
