@@ -20,6 +20,59 @@ import urllib.request
 ISSUER = "http://127.0.0.1:8080/realms/oidc-cli"
 CALLBACK = "http://127.0.0.1:42813/callback"
 
+CLI_ERRORS = {
+    "invalid_input", "discovery_failed", "listener_failed", "browser_failed",
+    "oauth_error", "token_exchange_failed", "token_invalid", "timeout",
+    "cancelled", "internal_error",
+}
+
+
+class CheckFailed(ValueError):
+    pass
+
+
+def failure_reason(error):
+    if isinstance(error, CheckFailed):
+        if error.args and error.args[0] in CLI_ERRORS:
+            return "CLI returned " + error.args[0]
+        if error.args == ("login_form_missing",):
+            return "expected Keycloak login form was not present"
+    if isinstance(error, urllib.error.HTTPError):
+        if isinstance(error.code, int) and 100 <= error.code <= 599:
+            origin = urllib.parse.urlsplit(error.url).netloc
+            endpoint = "callback" if origin == urllib.parse.urlsplit(CALLBACK).netloc else "provider"
+            reason = f"{endpoint} HTTP {error.code}"
+            if error.fp is not None:
+                try:
+                    body = error.read(65536).decode("utf-8", errors="replace")
+                except OSError:
+                    return reason + " (error page unavailable)"
+                for label in ("Invalid callback", "Invalid issuer", "Cookie not found",
+                              "HTTPS required", "Invalid username or password",
+                              "Invalid parameter", "Page has expired", "Session not active"):
+                    if label.lower() in body.lower():
+                        return reason + " (" + label + ")"
+            return reason
+        return "HTTP error"
+    if isinstance(error, queue.Empty):
+        return "authorization event was not received"
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return "deadline exceeded"
+    return "invalid response or request failed"
+
+
+def check_result(result, returncode):
+    if not isinstance(result, dict):
+        raise CheckFailed("invalid_result")
+    if returncode != 0 or result.get("ok") is not True:
+        error = result.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        raise CheckFailed(code if isinstance(code, str) and code in CLI_ERRORS else "invalid_result")
+    identity = result.get("identity")
+    if (result.get("protocol_version") != 1 or not isinstance(identity, dict)
+            or identity.get("issuer") != ISSUER or not identity.get("subject")):
+        raise CheckFailed("invalid_result")
+
 
 class LoginForm(HTMLParser):
     def __init__(self):
@@ -30,6 +83,17 @@ class LoginForm(HTMLParser):
         attrs = dict(attrs)
         if tag == "form" and attrs.get("id") == "kc-form-login":
             self.action = attrs.get("action")
+
+
+class FixtureCookiePolicy(http.cookiejar.DefaultCookiePolicy):
+    def return_ok_secure(self, cookie, request):
+        # Mirror browsers' loopback exception only for this disposable fixture.
+        if (cookie.secure and cookie.domain == "127.0.0.1"
+                and urllib.parse.urlsplit(request.get_full_url()).scheme == "http"
+                and urllib.parse.urlsplit(request.get_full_url()).netloc
+                == urllib.parse.urlsplit(ISSUER).netloc):
+            return True
+        return super().return_ok_secure(cookie, request)
 
 
 class LocalRedirects(urllib.request.HTTPRedirectHandler):
@@ -89,6 +153,7 @@ def main():
     reader = threading.Thread(target=read_event, daemon=True)
     reader.start()
     deadline = time.monotonic() + 75
+    stage = "authorization event"
     try:
         process.stdin.write(json.dumps(request) + "\n")
         process.stdin.close()
@@ -108,7 +173,9 @@ def main():
             raise ValueError("PKCE S256 not requested")
         browser = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+            urllib.request.HTTPCookieProcessor(
+                http.cookiejar.CookieJar(policy=FixtureCookiePolicy())
+            ),
             LocalRedirects(callback),
         )
 
@@ -120,9 +187,10 @@ def main():
                 return response.read(1024 * 1024).decode("utf-8")
 
         form = LoginForm()
+        stage = "authorization page"
         form.feed(fetch(authorization_url))
         if not form.action:
-            raise ValueError("Keycloak login form missing")
+            raise CheckFailed("login_form_missing")
         action = urllib.parse.urljoin(authorization_url, form.action)
         parsed_action = urllib.parse.urlsplit(action)
         if parsed_action.scheme != "http" or parsed_action.netloc != "127.0.0.1:8080":
@@ -132,16 +200,14 @@ def main():
             "password": "test-password-not-for-production",
             "credentialId": "",
         }).encode("ascii")
+        stage = "login submission"
         fetch(action, credentials)
+        stage = "CLI result"
         process.wait(timeout=max(1, deadline - time.monotonic()))
         stdout = process.stdout.read()
         reader.join(timeout=2)
         result = json.loads(stdout)
-        if (process.returncode != 0 or result.get("protocol_version") != 1
-                or result.get("ok") is not True
-                or result.get("identity", {}).get("issuer") != ISSUER
-                or not result.get("identity", {}).get("subject")):
-            raise ValueError("authentication result failed")
+        check_result(result, process.returncode)
         tokens = result.get("tokens", {})
         if not tokens.get("id_token") or not tokens.get("access_token"):
             raise ValueError("requested tokens missing")
@@ -150,9 +216,9 @@ def main():
             raise ValueError("token leaked to stderr")
         print("Keycloak E2E passed: code + S256 + loopback callback + verified identity.")
         return 0
-    except (OSError, ValueError, KeyError, queue.Empty, subprocess.TimeoutExpired):
+    except (OSError, ValueError, KeyError, queue.Empty, subprocess.TimeoutExpired) as error:
         # Never print provider responses, URLs, credentials, or token-bearing output.
-        print("Keycloak E2E failed; check fixture readiness and client configuration.", file=sys.stderr)
+        print(f"Keycloak E2E failed at {stage}: {failure_reason(error)}.", file=sys.stderr)
         return 1
     finally:
         if process.poll() is None:

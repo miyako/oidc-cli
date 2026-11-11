@@ -72,6 +72,14 @@ interactive browser testing or claim support for MFA/custom login themes. The
 manual-only **Optional Keycloak E2E** workflow runs the same check and tears down
 the fixture even on failure. Ordinary source CI does not start Keycloak.
 
+Keycloak marks session cookies `Secure` on HTTP loopback secure contexts.
+The Python browser simulation has a test-only cookie-policy exception for
+`http://127.0.0.1:8080` so those cookies are sent back to that exact fixture
+origin, while normal cookie domain/path checks remain enforced. The exception
+does not apply to another host/port or the callback listener, and does not change
+the CLI's production HTTPS policy. Failures report fixed stages, HTTP status
+and allowlisted error labels/codes, never raw HTML, URLs, credentials or tokens.
+
 Stop and reset the fixture before repeat imports or after use:
 
 ```sh
