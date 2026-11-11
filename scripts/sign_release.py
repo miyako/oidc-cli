@@ -92,7 +92,7 @@ def select_identity(output, team):
 def verify_binary(path, target, team, *, notarized=False):
     args = ["/usr/bin/codesign", "--verify", "--strict", "--all-architectures"]
     if notarized:
-        args += ["--check-notarization", "--test-requirement", "notarized"]
+        args += ["--check-notarization", "--test-requirement", "=notarized"]
     for attempt in range(4 if notarized else 1):
         try:
             run_tool("notarized signature verification" if notarized else "signature verification",

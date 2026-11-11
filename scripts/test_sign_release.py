@@ -116,7 +116,7 @@ class SigningTests(unittest.TestCase):
         with mock.patch.object(signing, "run_tool", side_effect=["", DISPLAY, DISPLAY]) as run:
             signing.verify_binary(Path("fixture"), "darwin_universal", TEAM, notarized=True)
             self.assertIn("--check-notarization", run.call_args_list[0].args[1])
-            self.assertIn("notarized", run.call_args_list[0].args[1])
+            self.assertIn("=notarized", run.call_args_list[0].args[1])
             inspected = [call.args[1] for call in run.call_args_list[1:]]
             self.assertTrue(any("arm64" in args for args in inspected))
             self.assertTrue(any("x86_64" in args for args in inspected))
