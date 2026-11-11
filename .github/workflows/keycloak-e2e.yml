@@ -1,0 +1,40 @@
+name: Optional Keycloak E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keycloak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+      - name: Build CLI without cgo
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o build/oidc-cli ./cmd/oidc-cli
+      - name: Start disposable fixture and wait at most two minutes
+        run: |
+          docker compose -f testdata/keycloak/compose.yaml up -d
+          for _ in $(seq 1 60); do
+            if curl --silent --fail --max-time 1 \
+              http://127.0.0.1:8080/realms/oidc-cli/.well-known/openid-configuration >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Keycloak discovery did not become ready." >&2
+          exit 1
+      - name: Authenticate through the real HTTP login form
+        run: python3 scripts/keycloak_e2e.py --binary build/oidc-cli
+      - name: Destroy disposable fixture
+        if: always()
+        run: docker compose -f testdata/keycloak/compose.yaml down --volumes --remove-orphans
