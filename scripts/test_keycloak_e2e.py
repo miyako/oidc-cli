@@ -17,7 +17,7 @@ class BrowserTests(unittest.TestCase):
             self.assertNotIn(secret, failure_reason(error))
         self.assertEqual(failure_reason(CheckFailed("token_invalid")), "CLI returned token_invalid")
         self.assertEqual(
-            failure_reason(urllib.error.HTTPError(secret, 400, secret, {}, None)), "HTTP 400"
+            failure_reason(urllib.error.HTTPError(secret, 400, secret, {}, None)), "provider HTTP 400"
         )
 
     def test_cli_errors_are_allowlisted_for_diagnostics(self):

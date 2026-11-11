@@ -39,7 +39,20 @@ def failure_reason(error):
             return "expected Keycloak login form was not present"
     if isinstance(error, urllib.error.HTTPError):
         if isinstance(error.code, int) and 100 <= error.code <= 599:
-            return f"HTTP {error.code}"
+            origin = urllib.parse.urlsplit(error.url).netloc
+            endpoint = "callback" if origin == urllib.parse.urlsplit(CALLBACK).netloc else "provider"
+            reason = f"{endpoint} HTTP {error.code}"
+            if error.fp is not None:
+                try:
+                    body = error.read(65536).decode("utf-8", errors="replace")
+                except OSError:
+                    return reason + " (error page unavailable)"
+                for label in ("Invalid callback", "Invalid issuer", "Cookie not found",
+                              "HTTPS required", "Invalid username or password",
+                              "Invalid parameter", "Page has expired", "Session not active"):
+                    if label.lower() in body.lower():
+                        return reason + " (" + label + ")"
+            return reason
         return "HTTP error"
     if isinstance(error, queue.Empty):
         return "authorization event was not received"
