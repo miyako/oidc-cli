@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build unsigned, CGO-free release archives and their SHA-256 manifest."""
+"""Build CGO-free release archives, optionally Apple-signed/notarized, and checksums."""
 
 import argparse
 import gzip
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -12,6 +13,8 @@ import shutil
 import subprocess
 import tarfile
 import zipfile
+
+import sign_release
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,13 +58,21 @@ def main():
     parser.add_argument("--version", required=True, help="Semver without a v prefix")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
     parser.add_argument("--targets", nargs="+", choices=TARGETS, default=list(TARGETS))
+    parser.add_argument("--apple-signing", action="store_true",
+                        help="Require Developer ID signing and notarization on macOS CI")
     args = parser.parse_args()
     if not valid_version(args.version):
         parser.error("--version must be a semantic version without a v prefix")
     if "darwin_universal" in args.targets and not shutil.which("lipo"):
         parser.error("darwin_universal requires lipo on macOS")
+    if args.apple_signing:
+        sign_release.require_environment()
+        if not any(target.startswith("darwin_") for target in args.targets):
+            parser.error("--apple-signing requires macOS targets")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    (output / "SHA256SUMS").unlink(missing_ok=True)
+    (output / "APPLE_NOTARIZATION.json").unlink(missing_ok=True)
     build = output / "build"
     build.mkdir(exist_ok=True)
     targets = set(args.targets)
@@ -74,16 +85,25 @@ def main():
         subprocess.run(
             ["go", "build", "-trimpath", "-buildvcs=false", "-ldflags",
              f"-s -w -X main.version={args.version}", "-o", str(binary), "./cmd/oidc-cli"],
-            cwd=ROOT, env={**os.environ, "CGO_ENABLED": "0", "GOOS": goos, "GOARCH": goarch},
+            cwd=ROOT, env={**sign_release.public_environment(os.environ),
+                           "CGO_ENABLED": "0", "GOOS": goos, "GOARCH": goarch},
             check=True,
         )
         binaries[target] = binary
     if "darwin_universal" in targets:
         binary = build / "darwin_universal"
         subprocess.run(["lipo", "-create", str(binaries["darwin_arm64"]),
-                        str(binaries["darwin_amd64"]), "-output", str(binary)], check=True)
-        subprocess.run(["lipo", str(binary), "-verify_arch", "arm64", "x86_64"], check=True)
+                        str(binaries["darwin_amd64"]), "-output", str(binary)], check=True,
+                       env=sign_release.public_environment(os.environ))
+        subprocess.run(["lipo", str(binary), "-verify_arch", "arm64", "x86_64"], check=True,
+                       env=sign_release.public_environment(os.environ))
         binaries["darwin_universal"] = binary
+    receipt = None
+    if args.apple_signing:
+        receipt = sign_release.sign_and_notarize({
+            target: binaries[target] for target in sorted(set(args.targets))
+            if target.startswith("darwin_")
+        })
     checksums = []
     for target in sorted(set(args.targets)):
         windows = target.startswith("windows_")
@@ -91,6 +111,13 @@ def main():
         name = f"oidc-cli_{args.version}_{target}{suffix}"
         data = archive_bytes(binaries[target].read_bytes(),
                              "oidc-cli.exe" if windows else "oidc-cli", windows)
+        (output / name).write_bytes(data)
+        if receipt is not None and not windows:
+            sign_release.verify_archive(output / name, target, receipt)
+        checksums.append(f"{hashlib.sha256(data).hexdigest()}  {name}\n")
+    if receipt is not None:
+        name = "APPLE_NOTARIZATION.json"
+        data = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
         (output / name).write_bytes(data)
         checksums.append(f"{hashlib.sha256(data).hexdigest()}  {name}\n")
     (output / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")

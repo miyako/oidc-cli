@@ -1,0 +1,67 @@
+name: Signed release packaging
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      release_tag:
+        required: true
+        type: string
+    secrets:
+      APPLE_DEVELOPER_ID_CERTIFICATE:
+        required: true
+      APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD:
+        required: true
+      KEYCHAIN_PASSWORD:
+        required: true
+      NOTARYTOOL_APPLE_ID:
+        required: true
+      NOTARYTOOL_TEAM_ID:
+        required: true
+      NOTARYTOOL_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+      - name: Build, sign, notarize and verify final macOS archives
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARYTOOL_APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
+          NOTARYTOOL_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
+        run: python3 scripts/package_release.py --version "${RELEASE_TAG#v}" --apple-signing
+      - name: Smoke-test signed universal executable and checksums
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          dist/build/darwin_universal version | python3 -c \
+            'import json,os,sys; r=json.load(sys.stdin); assert r["ok"] and r["protocol_version"] == 1 and r["version"] == os.environ["RELEASE_TAG"].removeprefix("v")'
+          (cd dist && shasum -a 256 -c SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/APPLE_NOTARIZATION.json
+          if-no-files-found: error
+          retention-days: 7
