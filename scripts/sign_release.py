@@ -28,6 +28,12 @@ ARCHITECTURES = {
 IDENTITY = re.compile(
     r'^\s*\d+\)\s+([0-9A-Fa-f]{40})\s+"Developer ID Application: .*\(([A-Z0-9]+)\)"\s*$'
 )
+TOOL_FAILURE_LABELS = (
+    "errSecInternalComponent", "User interaction is not allowed",
+    "unable to build chain to self-signed root", "CSSMERR_TP_NOT_TRUSTED",
+    "The specified item could not be found in the keychain",
+    "timestamp service is not available", "resource fork",
+)
 
 
 class SigningError(ValueError):
@@ -61,7 +67,11 @@ def run_tool(label, args, *, timeout=120, stdout_only=False):
         # Exception strings and tool diagnostics can contain credential-bearing argv.
         raise SigningError(label + ": tool launch failed or timed out") from None
     if result.returncode:
-        raise SigningError(label + f": tool failed (exit {result.returncode})")
+        diagnostic = result.stdout + result.stderr
+        reason = next((value for value in TOOL_FAILURE_LABELS
+                       if value.lower() in diagnostic.lower()), None)
+        suffix = "; " + reason if reason else ""
+        raise SigningError(label + f": tool failed (exit {result.returncode}{suffix})")
     return result.stdout if stdout_only else result.stdout + result.stderr
 
 
@@ -150,6 +160,9 @@ def sign_and_notarize(binaries):
             run_tool("authorize signing key", [
                 "/usr/bin/security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
                 "-s", "-k", password, keychain,
+            ])
+            run_tool("isolate signing keychain search list", [
+                "/usr/bin/security", "list-keychains", "-d", "user", "-s", keychain,
             ])
             identity = select_identity(run_tool("find imported identity", [
                 "/usr/bin/security", "find-identity", "-v", "-p", "codesigning", keychain,

@@ -173,6 +173,8 @@ class SigningTests(unittest.TestCase):
                 submit = labels.index("submit notarization")
                 for target in binaries:
                     self.assertLess(labels.index("sign " + target), submit)
+                    self.assertLess(labels.index("isolate signing keychain search list"),
+                                    labels.index("sign " + target))
                 self.assertEqual(labels[-2:], ["restore keychain search list", "delete temporary keychain"])
                 self.assertEqual(list(root.glob("oidc-cli-signing-*")), [])
 

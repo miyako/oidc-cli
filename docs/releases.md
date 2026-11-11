@@ -130,7 +130,8 @@ Credentials are used only in the macOS packaging step, never printed, persisted
 in artifacts, or forwarded to Go build subprocesses. A temporary restricted
 keychain holds the certificate and notary profile and is deleted on success or
 failure; the previous keychain search list is restored. Tool failures expose
-only fixed stage names and exit codes, not credential-bearing commands/output.
+only fixed stage names, exit codes and allowlisted Apple error labels, not
+credential-bearing commands or raw output.
 
 For a **non-publishing validation**, use **Actions → CI → Run workflow**, select
 the branch and enable **apple_signing**. After source CI, it runs the same shared
