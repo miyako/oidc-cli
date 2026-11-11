@@ -1,5 +1,10 @@
 # oidc-cli
 
+Owner-authored code is [MIT licensed](LICENSE). The
+[explicit v0.1.1 grant](docs/license-grant.md) also covers already-published
+v0.1.1 binaries; redistribute them with the
+[third-party notices](THIRD_PARTY_NOTICES.txt) and [licensing inventory](docs/licensing.md).
+
 Standalone Go OpenID Connect authentication CLI for desktop applications, including
 asynchronous invocation by a separately maintained 4D wrapper using
 `4D.SystemWorker`. No NetKit, native 4D plugin, or wrapper source is required.
