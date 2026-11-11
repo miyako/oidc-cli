@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      apple_signing:
+        description: Validate Apple signing/notarization and upload assets without publishing
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       source_sha:
@@ -15,6 +20,15 @@ permissions:
   contents: read
 
 jobs:
+  apple-signing-check:
+    if: github.event_name == 'workflow_dispatch' && inputs.apple_signing
+    needs: source
+    uses: ./.github/workflows/package.yml
+    secrets: inherit
+    with:
+      source_sha: ${{ github.sha }}
+      release_tag: v0.0.0-signing-check
+
   source:
     strategy:
       fail-fast: false

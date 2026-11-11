@@ -25,7 +25,7 @@ class BumpWorkflowTests(unittest.TestCase):
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.invalid")
         (self.repo / "scripts").mkdir()
-        for name in ("bump_version.py", "package_release.py"):
+        for name in ("bump_version.py", "package_release.py", "sign_release.py"):
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
         version_file = self.repo / "cmd/oidc-cli/version.txt"
         version_file.parent.mkdir(parents=True)

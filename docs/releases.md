@@ -12,12 +12,13 @@ actual successful Windows CI run supplies that evidence.
 After the workflow is merged into `main`, open **Actions → Bump version →
 Run workflow**, select `main`, choose the increment, and run it. **This publishes
 a release**, not just a version-only commit. No local build tools or personal
-access token are needed; it uses the repository's workflow token.
+access token are needed; it uses the repository's workflow token and the
+configured Apple signing/notarization secrets.
 
 The canonical source version is `cmd/oidc-cli/version.txt`, embedded into normal
 Go builds. The choices have these semantics:
 
-| Choice | Current `0.1.0-rc.1` becomes | From stable `1.2.3` |
+| Choice | From RC `0.1.0-rc.1` | From stable `1.2.3` |
 | --- | --- | --- |
 | `prerelease` (default) | `0.1.0-rc.2` | `1.2.4-rc.1` |
 | `patch` | `0.1.0` (promotes the RC) | `1.2.4` |
@@ -28,6 +29,9 @@ The workflow commits that version on the default branch and atomically pushes
 the commit and annotated `v<version>` tag, refusing existing tags and stale
 dispatches. It then **calls** the release workflow with the exact bumped commit,
 which tests on all three platforms, packages, verifies checksums, and publishes.
+macOS packaging is fail-closed: missing credentials, signing/verification failure,
+or a notarization status other than `Accepted` prevents publication. There is no
+unsigned fallback in either the bump or direct tag-push release path.
 This explicit call is necessary: tags pushed by `GITHUB_TOKEN` do not trigger
 another push workflow. Release versions are injected from the tag during
 packaging; source builds report the embedded version.
@@ -60,7 +64,10 @@ The full packaging command requires macOS and `lipo`. It builds
 without universal assembly, select e.g.
 `--targets darwin_arm64 darwin_amd64 windows_amd64`.
 Output goes to `dist/` (or `--output PATH`); intermediate binaries are under
-its `build/` directory. Packaging does not publish or create tags.
+its `build/` directory. This local command produces **unsigned development
+archives**, not the downloadable signed-release equivalent. Packaging does not
+publish or create tags. `--apple-signing` is reserved for the macOS CI path with
+the required secrets; it cannot silently downgrade to unsigned mode.
 
 For version `1.2.3`, the release assets are:
 
@@ -69,11 +76,12 @@ For version `1.2.3`, the release assets are:
 * `oidc-cli_1.2.3_darwin_universal.tar.gz`
 * `oidc-cli_1.2.3_windows_amd64.zip`
 * `SHA256SUMS`
+* `APPLE_NOTARIZATION.json` (signed CI builds only)
 
 Each archive contains only `oidc-cli` (macOS, mode 0755) or `oidc-cli.exe`
 (Windows) at its root. The universal Mach-O is assembled and architecture-checked
 with `lipo`. The manifest has lowercase SHA-256 digests, two spaces, and exact
-archive basenames. Archive metadata is normalized, but this is not a claim of
+archive basenames plus the notarization receipt. Archive metadata is normalized, but this is not a claim of
 bit-for-bit reproducible Go toolchains or signed provenance.
 
 Pushing a `v<version>` tag also triggers `.github/workflows/release.yml` directly;
@@ -88,14 +96,64 @@ read-only repository permissions. Only bump and publication need
 `contents:write`. Third-party actions use verified full commit SHAs.
 No release has been published merely by adding these files.
 
-## Unsigned binaries
+## Apple signing and notarization
 
-These are **unsigned and not notarized**. No Apple Developer ID, notarization,
-Windows Authenticode, or associated verification is configured. macOS quarantine
-or Gatekeeper and Windows reputation policies can block downloads. SHA-256
-validation detects unexpected bytes relative to the selected manifest; it is
-not publisher authentication if an attacker can replace both assets and the
-manifest. Decide your distribution/signing trust policy before production use.
+The shared packaging workflow signs the final arm64, x86_64 and universal Mach-O
+executables with a **Developer ID Application** identity, hardened runtime and
+secure timestamp. The universal executable is assembled **before** signing.
+Exactly one valid imported identity is required, and its team must match the
+notarization team. No ad-hoc or Apple Development identity is accepted.
+
+The signed binaries are submitted together in a temporary ZIP to Apple's notary
+service with a bounded 20-minute wait. After `Accepted`, every architecture must
+pass signature inspection and an online `codesign --check-notarization`
+verification with the `notarized` requirement (up to four bounded attempts for
+ticket propagation, with no unsigned fallback). Only then are the final archives
+written. Their extracted executables are checked again against the signed
+binary hashes, Developer ID signatures and notarization, before checksums are
+generated. A signature is embedded in the executable, not an archive attribute.
+
+`APPLE_NOTARIZATION.json` records acceptance, submission ID and signed-binary
+hashes; its hash is included in `SHA256SUMS`. It is an informational receipt,
+not itself an Apple signature or a substitute for OS signature checks and a
+trusted pinned archive digest.
+
+Six Actions secrets are required:
+
+* `APPLE_DEVELOPER_ID_CERTIFICATE` (base64 PKCS#12 including the private key)
+* `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`
+* `KEYCHAIN_PASSWORD`
+* `NOTARYTOOL_APPLE_ID`
+* `NOTARYTOOL_TEAM_ID`
+* `NOTARYTOOL_PASSWORD` (Apple app-specific password)
+
+Credentials are used only in the macOS packaging step, never printed, persisted
+in artifacts, or forwarded to Go build subprocesses. A temporary restricted
+keychain holds the certificate and notary profile and is deleted on success or
+failure; the previous keychain search list is restored. Tool failures expose
+only fixed stage names, exit codes and allowlisted Apple error labels, not
+credential-bearing commands or raw output.
+
+For a **non-publishing validation**, use **Actions → CI → Run workflow**, select
+the branch and enable **apple_signing**. After source CI, it runs the same shared
+signed packaging job with version `0.0.0-signing-check` and uploads its archives
+for seven days. It does not bump, tag or create a release. Normal push/PR CI does
+not access signing credentials. Run a separately authorized bump after merging
+to publish a new signed version; old releases are not rewritten.
+
+Bare Mach-O executables, ZIPs and tar archives cannot carry a stapled
+notarization ticket. The standalone CLI relies on Apple's online ticket lookup;
+offline first-launch acceptance is **not** promised. The future wrapper must
+preserve the signed executable bytes and handle signing/notarization of its own
+distributable, using a supported staplable container such as a DMG if needed.
+Actual quarantined downloads and execution from 4D still need host acceptance.
+Do not treat checksum verification as a reason to remove quarantine automatically.
+
+**Windows assets remain unsigned**: no Authenticode certificate is configured,
+and Windows reputation policies can block or warn on downloads. Local builds
+and releases published before this signing workflow remain unsigned or ad-hoc
+signed. SHA-256 validation alone is not publisher authentication if an attacker
+can replace both the assets and manifest.
 
 ## Pinned wrapper contract
 

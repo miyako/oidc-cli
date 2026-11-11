@@ -74,6 +74,7 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml
+    secrets: inherit
     with:
       release_tag: ${{ needs.bump.outputs.tag }}
       source_sha: ${{ needs.bump.outputs.sha }}

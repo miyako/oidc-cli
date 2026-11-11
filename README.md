@@ -71,5 +71,7 @@ go vet ./...
 
 Tests use a local mock issuer and real RSA signatures/JWKS, with injected browser
 navigation. They do not imply real-provider, Windows-runtime, MFA, customer-tenant
-or 4D acceptance. Release binaries are unsigned and not notarized; distribution
-policy and OS trust prompts remain the consumer's responsibility.
+or 4D acceptance. The release workflow requires Developer ID signing and Apple
+notarization for macOS assets; local builds and earlier releases may be unsigned.
+Windows assets remain unsigned. See the release documentation for notarization,
+download and wrapper-distribution limitations.
