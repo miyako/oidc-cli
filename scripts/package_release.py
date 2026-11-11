@@ -124,4 +124,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except sign_release.SigningError as error:
+        raise SystemExit(str(error)) from None

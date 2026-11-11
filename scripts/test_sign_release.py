@@ -107,6 +107,7 @@ class SigningTests(unittest.TestCase):
             self.assertTrue(any("x86_64" in args for args in inspected))
         for invalid in (
             DISPLAY.replace("Timestamp=", "Missing="),
+            DISPLAY.replace("Timestamp=Nov 11, 2026", "Timestamp=none"),
             DISPLAY.replace(TEAM, "WRONGTEAM"),
             DISPLAY.replace("(runtime)", "(none)"),
             DISPLAY + "Signature=adhoc\n",
@@ -141,7 +142,8 @@ class SigningTests(unittest.TestCase):
                     if label == "import signing certificate":
                         p12 = Path(args[2])
                         self.assertEqual(p12.read_bytes(), b"fixture-p12")
-                        self.assertEqual(p12.stat().st_mode & 0o777, 0o600)
+                        if os.name != "nt":
+                            self.assertEqual(p12.stat().st_mode & 0o777, 0o600)
                     if label == "find imported identity":
                         return IDENTITY
                     if label == "signature inspection":

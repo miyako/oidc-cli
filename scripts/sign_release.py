@@ -89,6 +89,7 @@ def verify_binary(path, target, team, *, notarized=False):
         if (not re.search(r"^Authority=Developer ID Application:", display, re.MULTILINE)
                 or not re.search(r"^TeamIdentifier=" + re.escape(team) + r"$", display, re.MULTILINE)
                 or not re.search(r"^Timestamp=.+$", display, re.MULTILINE)
+                or re.search(r"^Timestamp=(?:none|not set)$", display, re.MULTILINE | re.IGNORECASE)
                 or not re.search(r"^CodeDirectory .*flags=.*\([^)]*\bruntime\b", display, re.MULTILINE)
                 or "Signature=adhoc" in display):
             raise SigningError("signature lacks the required Developer ID, team, timestamp or runtime")
