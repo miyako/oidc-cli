@@ -16,8 +16,6 @@ import (
 	"github.com/miyako/oidc-cli/internal/auth"
 )
 
-var version = "0.1.0-rc.1"
-
 type response struct {
 	ProtocolVersion int  `json:"protocol_version"`
 	OK              bool `json:"ok"`
