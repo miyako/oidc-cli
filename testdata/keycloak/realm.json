@@ -1,0 +1,40 @@
+{
+  "realm": "oidc-cli",
+  "enabled": true,
+  "displayName": "Disposable oidc-cli development realm",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "clients": [
+    {
+      "clientId": "oidc-cli",
+      "name": "Disposable native public client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://127.0.0.1:42813/callback"],
+      "webOrigins": [],
+      "attributes": {"pkce.code.challenge.method": "S256"},
+      "defaultClientScopes": ["web-origins", "acr", "profile", "email"],
+      "optionalClientScopes": []
+    }
+  ],
+  "users": [
+    {
+      "username": "test-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Disposable",
+      "lastName": "User",
+      "email": "test-user@example.invalid",
+      "requiredActions": [],
+      "credentials": [
+        {"type": "password", "value": "test-password-not-for-production", "temporary": false}
+      ]
+    }
+  ]
+}

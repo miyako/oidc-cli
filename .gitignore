@@ -1,0 +1,4 @@
+/dist/
+/oidc-cli
+/oidc-cli.exe
+__pycache__/
