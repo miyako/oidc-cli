@@ -22,7 +22,6 @@ permissions:
 jobs:
   apple-signing-check:
     if: github.event_name == 'workflow_dispatch' && inputs.apple_signing
-    needs: source
     uses: ./.github/workflows/package.yml
     secrets: inherit
     with:
@@ -30,6 +29,7 @@ jobs:
       release_tag: v0.0.0-signing-check
 
   source:
+    if: github.event_name != 'workflow_dispatch' || !inputs.apple_signing
     strategy:
       fail-fast: false
       matrix:
