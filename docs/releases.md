@@ -98,7 +98,8 @@ No release has been published merely by adding these files.
 
 ## Apple signing and notarization
 
-The shared packaging workflow signs the final arm64, x86_64 and universal Mach-O
+The shared packaging workflow uses a macOS 15 Intel runner and signs the final
+arm64, x86_64 and universal Mach-O
 executables with a **Developer ID Application** identity, hardened runtime and
 secure timestamp. The universal executable is assembled **before** signing.
 Exactly one valid imported identity is required, and its team must match the
@@ -135,10 +136,12 @@ only fixed stage names, exit codes and allowlisted Apple error labels, not
 credential-bearing commands or raw output.
 
 For a **non-publishing validation**, use **Actions → CI → Run workflow**, select
-the branch and enable **apple_signing**. After source CI, it runs the same shared
-signed packaging job with version `0.0.0-signing-check` and uploads its archives
+the branch and enable **apple_signing**. It runs only the same shared signed
+packaging job with version `0.0.0-signing-check` and uploads its archives
 for seven days. It does not bump, tag or create a release. Normal push/PR CI does
-not access signing credentials. Run a separately authorized bump after merging
+not access signing credentials. Source CI remains separate for this diagnostic
+run; actual releases always require the full three-platform source CI before
+signed packaging. Run a separately authorized bump after merging
 to publish a new signed version; old releases are not rewritten.
 
 Bare Mach-O executables, ZIPs and tar archives cannot carry a stapled
