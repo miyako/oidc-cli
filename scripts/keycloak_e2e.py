@@ -85,6 +85,17 @@ class LoginForm(HTMLParser):
             self.action = attrs.get("action")
 
 
+class FixtureCookiePolicy(http.cookiejar.DefaultCookiePolicy):
+    def return_ok_secure(self, cookie, request):
+        # Mirror browsers' loopback exception only for this disposable fixture.
+        if (cookie.secure and cookie.domain == "127.0.0.1"
+                and urllib.parse.urlsplit(request.get_full_url()).scheme == "http"
+                and urllib.parse.urlsplit(request.get_full_url()).netloc
+                == urllib.parse.urlsplit(ISSUER).netloc):
+            return True
+        return super().return_ok_secure(cookie, request)
+
+
 class LocalRedirects(urllib.request.HTTPRedirectHandler):
     max_redirections = 5
 
@@ -162,7 +173,9 @@ def main():
             raise ValueError("PKCE S256 not requested")
         browser = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
-            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+            urllib.request.HTTPCookieProcessor(
+                http.cookiejar.CookieJar(policy=FixtureCookiePolicy())
+            ),
             LocalRedirects(callback),
         )
 
