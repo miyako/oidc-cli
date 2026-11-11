@@ -4,7 +4,8 @@ Standalone Go OpenID Connect authentication CLI for desktop applications, includ
 asynchronous invocation by a separately maintained 4D wrapper using
 `4D.SystemWorker`. No NetKit, native 4D plugin, or wrapper source is required.
 
-**First release candidate: `0.1.0-rc.1`, protocol version 1.** Uses discovery,
+**Protocol version 1.** The [source version](cmd/oidc-cli/version.txt) is embedded
+in local builds. Uses discovery,
 Authorization Code + PKCE S256, state, nonce, an exclusive numeric-loopback HTTP
 listener and the external system browser. The default result is only the verified
 `issuer` + `subject` identity pair. It is **not server-login proof** and does not
@@ -48,6 +49,8 @@ when the owning application/task ends.
 
 See [provider registration and disposable Keycloak setup](docs/providers.md) and
 [release assets, checksums and pinned downloads](docs/releases.md).
+Maintainers can use **Actions → Bump version → Run workflow** on `main` to bump,
+tag, build and publish a release.
 The Keycloak fixtures are test-only; no production credentials are shipped.
 Entra tenant/MFA acceptance and actual 4D host integration are later compatibility
 work, not established support.

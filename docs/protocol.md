@@ -4,7 +4,7 @@
 65,536 bytes including whitespace, followed by EOF. Unknown, duplicate,
 case-mismatched, null, incorrectly typed fields, trailing objects and malformed
 JSON are rejected. No configuration or token values are accepted in argv.
-`oidc-cli version` requires no input and reports
+`oidc-cli version` requires no input and reports, for example,
 `{"protocol_version":1,"ok":true,"version":"0.1.0-rc.1"}`.
 
 One process = one attempt = one final newline-terminated stdout JSON object.

@@ -1,0 +1,79 @@
+name: Bump version
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment (also builds and publishes the release)
+        required: true
+        type: choice
+        default: prerelease
+        options:
+          - prerelease
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-release
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.commit.outputs.tag }}
+      sha: ${{ steps.commit.outputs.sha }}
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      DISPATCH_REF: ${{ github.ref }}
+      DISPATCH_SHA: ${{ github.sha }}
+      BUMP: ${{ inputs.bump }}
+    steps:
+      - name: Require the default branch
+        run: |
+          if [[ "$DISPATCH_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "::error::Run Bump version on the default branch."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Bump source version, commit and atomically push the tag
+        id: commit
+        run: |
+          if [[ "$(git rev-parse HEAD)" != "$DISPATCH_SHA" ]]; then
+            echo "::error::The default branch advanced; start a fresh bump run."
+            exit 1
+          fi
+          VERSION=$(python3 scripts/bump_version.py "$BUMP")
+          TAG="v$VERSION"
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            echo "::error::The planned release tag already exists; no tag will be overwritten."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/oidc-cli/version.txt
+          git commit -m "Bump version to $VERSION"
+          git tag -a "$TAG" -m "Release $VERSION"
+          git push --atomic origin "HEAD:refs/heads/$DEFAULT_BRANCH" "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: bump
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      release_tag: ${{ needs.bump.outputs.tag }}
+      source_sha: ${{ needs.bump.outputs.sha }}
