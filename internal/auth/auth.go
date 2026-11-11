@@ -193,10 +193,15 @@ func Run(ctx context.Context, c Config, opts Options) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(c.TimeoutSeconds)*time.Second)
 	defer cancel()
 	result, err := run(ctx, c, opts)
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	return completeAttempt(ctx, result, err)
+}
+
+func completeAttempt(ctx context.Context, result *Result, err error) (*Result, error) {
+	// Cancellation wins until this completion gate, including over a ready identity.
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
 		return nil, fail("timeout", "authentication deadline exceeded")
-	}
-	if ctx.Err() != nil {
+	case context.Canceled:
 		return nil, fail("cancelled", "authentication cancelled")
 	}
 	return result, err

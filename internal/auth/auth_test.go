@@ -426,32 +426,69 @@ func TestListenerClosedAfterCancellation(t *testing.T) {
 		conn.Close()
 		t.Fatal("listener survived cancellation")
 	}
-
 }
 
 func TestJWKSRequestCancelledWithAttempt(t *testing.T) {
-	f := newIssuer(t, "jwks_wait")
-	f.jwksStarted = make(chan struct{})
-	f.jwksCancelled = make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	c := f.config()
-	c.HTTPTimeout = 5
-	go func() {
-		_, err := Run(ctx, c, Options{Browser: f.browser(t, nil)})
-		done <- err
-	}()
-	select {
-	case <-f.jwksStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("JWKS request did not start")
+	for _, mode := range []string{"cancelled", "timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newIssuer(t, "jwks_wait")
+			f.jwksStarted = make(chan struct{})
+			f.jwksCancelled = make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			c := f.config()
+			c.HTTPTimeout = 5
+			if mode == "timeout" {
+				c.TimeoutSeconds = 1
+			}
+			go func() {
+				_, err := Run(ctx, c, Options{Browser: f.browser(t, nil)})
+				done <- err
+			}()
+			select {
+			case <-f.jwksStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("JWKS request did not start")
+			}
+			if mode == "cancelled" {
+				cancel()
+			}
+			errorCode(t, <-done, mode)
+			select {
+			case <-f.jwksCancelled:
+			case <-time.After(500 * time.Millisecond):
+				t.Fatal("JWKS HTTP request survived attempt completion")
+			}
+		})
 	}
+}
+
+func TestCompletionGateCancellationPriority(t *testing.T) {
+	identity := &Result{Identity: Identity{Issuer: "https://example.com", Subject: "user"}}
+	operationError := fail("token_invalid", "ID token verification failed")
+	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	errorCode(t, <-done, "cancelled")
-	select {
-	case <-f.jwksCancelled:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("JWKS HTTP request survived attempt cancellation")
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	for _, tc := range []struct {
+		ctx  context.Context
+		code string
+	}{{cancelled, "cancelled"}, {expired, "timeout"}} {
+		for _, underlying := range []error{nil, operationError} {
+			result, err := completeAttempt(tc.ctx, identity, underlying)
+			if result != nil {
+				t.Fatal("cancelled attempt exposed a ready identity")
+			}
+			errorCode(t, err, tc.code)
+		}
+	}
+	result, err := completeAttempt(context.Background(), identity, nil)
+	if result != identity || err != nil {
+		t.Fatal("active attempt lost its verified result")
+	}
+	result, err = completeAttempt(context.Background(), nil, operationError)
+	if result != nil || err != operationError {
+		t.Fatal("active attempt lost its operation error")
 	}
 }

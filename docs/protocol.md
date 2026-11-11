@@ -69,7 +69,13 @@ to another process or server.
 | `10` | `internal_error`, or failure writing stdout |
 
 Per-request HTTP timeouts before the overall deadline use the operation's error
-code, not `timeout`. Error messages are sanitized constants, never provider
+code, not `timeout`. Cancellation/deadline state is checked once at the final
+authentication completion gate: if already cancelled/expired then, it takes
+precedence over a ready identity or an operation failure. This fail-closed policy
+prevents accepting a result at the gate after its deadline or an observed owner
+exit/cancellation. Once that gate accepts a result,
+later cancellation cannot retract stdout already being emitted.
+Error messages are sanitized constants, never provider
 response bodies, authorization codes, tokens, error descriptions or private
 filesystem details. No diagnostic logging is emitted during normal browser mode.
 Output write failures cannot guarantee a complete final JSON object. Forced OS
