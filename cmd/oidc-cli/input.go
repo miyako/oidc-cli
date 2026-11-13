@@ -30,7 +30,7 @@ func decodeConfig(data []byte) (auth.Config, error) {
 		switch key {
 		case "protocol_version", "issuer", "client_id", "scopes", "listen_address", "callback_path",
 			"timeout_seconds", "http_timeout_seconds", "open_browser", "allow_insecure_loopback_http",
-			"include_tokens", "parent_pid":
+			"include_tokens", "parent_pid", "success_html", "success_html_file", "failure_html", "failure_html_file":
 		default:
 			return c, errors.New("unknown field")
 		}

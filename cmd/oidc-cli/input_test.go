@@ -20,4 +20,8 @@ func TestDecodeConfig(t *testing.T) {
 	if err != nil || c.OpenBrowser == nil || *c.OpenBrowser {
 		t.Fatalf("decode: %+v %v", c, err)
 	}
+	c, err = decodeConfig([]byte(`{"protocol_version":1,"success_html":"<p>ok</p>","failure_html_file":"/tmp/f.html"}`))
+	if err != nil || c.SuccessHTML != "<p>ok</p>" || c.FailureHTMLFile != "/tmp/f.html" {
+		t.Fatalf("decode pages: %+v %v", c, err)
+	}
 }
