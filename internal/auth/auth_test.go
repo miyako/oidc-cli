@@ -8,10 +8,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +32,15 @@ type issuerFixture struct {
 	mode                       string
 	jwksStarted                chan struct{}
 	jwksCancelled              chan struct{}
+	pages                      chan resultPage
+}
+
+type resultPage struct {
+	status      int
+	contentType string
+	csp         string
+	body        string
+	err         error
 }
 
 func newIssuer(t *testing.T, mode string) *issuerFixture {
@@ -41,7 +53,7 @@ func newIssuer(t *testing.T, mode string) *issuerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &issuerFixture{key: key, otherKey: other, mode: mode}
+	f := &issuerFixture{key: key, otherKey: other, mode: mode, pages: make(chan resultPage, 8)}
 	f.server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.server.Close)
 	return f
@@ -199,20 +211,33 @@ func (f *issuerFixture) browser(t *testing.T, mutate func(url.Values)) func(cont
 			mutate(values)
 		}
 		cb.RawQuery = values.Encode()
-		req, err := http.NewRequestWithContext(ctx, "GET", cb.String(), nil)
-		if err != nil {
-			return err
-		}
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return err
-		}
-		res.Body.Close()
-		if res.StatusCode != 200 {
-			return errors.New("callback rejected")
-		}
+		// Like a real browser, navigate asynchronously: the result page arrives after the outcome.
+		go func() {
+			res, err := http.Get(cb.String())
+			if err != nil {
+				f.pages <- resultPage{err: err}
+				return
+			}
+			defer res.Body.Close()
+			body, err := io.ReadAll(res.Body)
+			f.pages <- resultPage{res.StatusCode, res.Header.Get("Content-Type"), res.Header.Get("Content-Security-Policy"), string(body), err}
+		}()
 		return nil
 	}
+}
+
+func (f *issuerFixture) page(t *testing.T) resultPage {
+	t.Helper()
+	select {
+	case p := <-f.pages:
+		if p.err != nil || p.status != 200 {
+			t.Fatalf("callback page: %+v %v", p, p.err)
+		}
+		return p
+	case <-time.After(5 * time.Second):
+		t.Fatal("no callback page")
+	}
+	return resultPage{}
 }
 
 func errorCode(t *testing.T, err error, code string) {
@@ -490,5 +515,87 @@ func TestCompletionGateCancellationPriority(t *testing.T) {
 	result, err = completeAttempt(context.Background(), nil, operationError)
 	if result != nil || err != operationError {
 		t.Fatal("active attempt lost its operation error")
+	}
+}
+
+func TestResultPages(t *testing.T) {
+	strict := "default-src 'none'; frame-ancestors 'none'"
+	f := newIssuer(t, "")
+	if _, err := Run(context.Background(), f.config(), Options{Browser: f.browser(t, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.page(t); !strings.Contains(p.body, "Authentication succeeded") || p.csp != strict || !strings.HasPrefix(p.contentType, "text/plain") {
+		t.Fatalf("default success page: %+v", p)
+	}
+	_, err := Run(context.Background(), f.config(), Options{Browser: f.browser(t, func(q url.Values) {
+		q.Del("code")
+		q.Set("error", "access_denied")
+		q.Set("error_description", "secret")
+	})})
+	errorCode(t, err, "oauth_error")
+	if p := f.page(t); !strings.Contains(p.body, "Authentication failed") || strings.Contains(p.body, "secret") || p.csp != strict {
+		t.Fatalf("default failure page: %+v", p)
+	}
+
+	failure := filepath.Join(t.TempDir(), "failure.html")
+	if err := os.WriteFile(failure, []byte("<h1>Sign-in failed</h1>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	custom := func(f *issuerFixture) Config {
+		c := f.config()
+		c.SuccessHTML = "<style>h1{color:green}</style><h1>Signed in</h1>"
+		c.FailureHTMLFile = failure
+		return c
+	}
+	if _, err := Run(context.Background(), custom(f), Options{Browser: f.browser(t, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	p := f.page(t)
+	if p.body != "<style>h1{color:green}</style><h1>Signed in</h1>" || !strings.HasPrefix(p.contentType, "text/html") ||
+		!strings.Contains(p.csp, "style-src 'unsafe-inline'") || strings.Contains(p.csp, "script-src") {
+		t.Fatalf("custom success page: %+v", p)
+	}
+	// Verification failures happen after the callback; the page must still report failure.
+	bad := newIssuer(t, "nonce")
+	_, err = Run(context.Background(), custom(bad), Options{Browser: bad.browser(t, nil)})
+	errorCode(t, err, "token_invalid")
+	if p := bad.page(t); p.body != "<h1>Sign-in failed</h1>" {
+		t.Fatalf("custom failure page: %+v", p)
+	}
+}
+
+func TestResultPageValidation(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	valid := write("ok.html", []byte("<p>ok</p>"))
+	for name, modify := range map[string]func(*Config){
+		"both":        func(c *Config) { c.SuccessHTML = "<p>ok</p>"; c.SuccessHTMLFile = valid },
+		"relative":    func(c *Config) { c.FailureHTMLFile = "ok.html" },
+		"missing":     func(c *Config) { c.SuccessHTMLFile = filepath.Join(dir, "missing.html") },
+		"directory":   func(c *Config) { c.SuccessHTMLFile = dir },
+		"empty-file":  func(c *Config) { c.SuccessHTMLFile = write("empty.html", nil) },
+		"large-file":  func(c *Config) { c.FailureHTMLFile = write("large.html", make([]byte, MaxPageBytes+1)) },
+		"binary-file": func(c *Config) { c.FailureHTMLFile = write("bad.html", []byte{0xff, 0xfe}) },
+		"large":       func(c *Config) { c.FailureHTML = strings.Repeat("a", MaxPageBytes+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := Config{ProtocolVersion: 1, Issuer: "http://127.0.0.1:8080/realm", ClientID: "desktop", AllowHTTP: true}
+			modify(&c)
+			err := c.Validate()
+			errorCode(t, err, "invalid_input")
+			if strings.Contains(err.Error(), dir) {
+				t.Fatal("path leaked")
+			}
+		})
+	}
+	c := Config{ProtocolVersion: 1, Issuer: "http://127.0.0.1:8080/realm", ClientID: "desktop", AllowHTTP: true, SuccessHTMLFile: valid}
+	if err := c.Validate(); err != nil || string(c.successPage) != "<p>ok</p>" || c.failurePage != nil {
+		t.Fatalf("valid page: %v", err)
 	}
 }

@@ -7,16 +7,18 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -35,7 +37,18 @@ type Config struct {
 	AllowHTTP       bool     `json:"allow_insecure_loopback_http,omitempty"`
 	IncludeTokens   bool     `json:"include_tokens,omitempty"`
 	ParentPID       int      `json:"parent_pid,omitempty"`
+	SuccessHTML     string   `json:"success_html,omitempty"`
+	SuccessHTMLFile string   `json:"success_html_file,omitempty"`
+	FailureHTML     string   `json:"failure_html,omitempty"`
+	FailureHTMLFile string   `json:"failure_html_file,omitempty"`
+
+	pagesLoaded bool
+	successPage []byte
+	failurePage []byte
 }
+
+// MaxPageBytes bounds each custom browser result page.
+const MaxPageBytes = 65536
 
 type Identity struct {
 	Issuer  string `json:"issuer"`
@@ -117,7 +130,51 @@ func (c *Config) Validate() error {
 	if !found {
 		return fail("invalid_input", "scopes must include openid")
 	}
+	if !c.pagesLoaded {
+		var err error
+		if c.successPage, err = loadPage("success_html", c.SuccessHTML, c.SuccessHTMLFile); err != nil {
+			return err
+		}
+		if c.failurePage, err = loadPage("failure_html", c.FailureHTML, c.FailureHTMLFile); err != nil {
+			return err
+		}
+		c.pagesLoaded = true
+	}
 	return nil
+}
+
+// loadPage returns nil when the default plain-text page should be used.
+func loadPage(key, inline, path string) ([]byte, error) {
+	if inline != "" && path != "" {
+		return nil, fail("invalid_input", key+" and "+key+"_file are mutually exclusive")
+	}
+	if inline != "" {
+		if len(inline) > MaxPageBytes || !utf8.ValidString(inline) {
+			return nil, fail("invalid_input", key+" must be UTF-8 of at most 65536 bytes")
+		}
+		return []byte(inline), nil
+	}
+	if path == "" {
+		return nil, nil
+	}
+	// Messages never include the path, avoiding private filesystem details in output.
+	invalid := fail("invalid_input", key+"_file must be an absolute path to a readable nonempty regular UTF-8 file of at most 65536 bytes")
+	if !filepath.IsAbs(path) {
+		return nil, invalid
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, invalid
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, invalid
+	}
+	b, err := io.ReadAll(io.LimitReader(f, MaxPageBytes+1))
+	if err != nil || len(b) == 0 || len(b) > MaxPageBytes || !utf8.Valid(b) {
+		return nil, invalid
+	}
+	return b, nil
 }
 
 func secureURL(raw string, allowHTTP bool) error {
@@ -252,6 +309,8 @@ func run(ctx context.Context, c Config, opts Options) (*Result, error) {
 	oauth := oauth2.Config{ClientID: c.ClientID, Endpoint: provider.Endpoint(), RedirectURL: redirect, Scopes: c.Scopes}
 	oauth.Endpoint.AuthStyle = oauth2.AuthStyleInParams
 	pending := make(chan callback, 1)
+	outcome := make(chan bool, 1)
+	written := make(chan struct{})
 	var received atomic.Bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -280,17 +339,39 @@ func run(ctx context.Context, c Config, opts Options) (*Result, error) {
 			http.Error(w, "Invalid callback", http.StatusBadRequest)
 			return
 		}
-		if received.CompareAndSwap(false, true) {
-			pending <- cb
-			fmt.Fprintln(w, "Authentication response received. You may close this window.")
-		} else {
+		if !received.CompareAndSwap(false, true) {
 			http.Error(w, "Already received", http.StatusConflict)
+			return
 		}
+		defer close(written)
+		// Hold the response until the outcome is known; bound it by the attempt deadline.
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Time{})
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = rc.SetWriteDeadline(deadline.Add(5 * time.Second))
+		}
+		pending <- cb
+		ok := false
+		select {
+		case ok = <-outcome:
+		case <-ctx.Done():
+		}
+		writePage(w, ok, c)
+		_ = rc.Flush()
 	})
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 8192}
 	serverErrors := make(chan error, 1)
 	go func() { serverErrors <- server.Serve(listener) }()
 	defer server.Close()
+	defer func() {
+		// Let the accepted callback finish writing its result page before closing the server.
+		if received.Load() {
+			select {
+			case <-written:
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}()
 	authURL := oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier))
 	if opts.Browser == nil || opts.Browser(ctx, authURL) != nil {
 		return nil, fail("browser_failed", "could not launch or report authorization URL")
@@ -303,6 +384,33 @@ func run(ctx context.Context, c Config, opts Options) (*Result, error) {
 		return nil, fail("listener_failed", "loopback listener stopped unexpectedly")
 	case cb = <-pending:
 	}
+	result, err := verify(ctx, c, provider, &oauth, cb, verifier, nonce)
+	outcome <- err == nil && ctx.Err() == nil
+	return result, err
+}
+
+func writePage(w http.ResponseWriter, ok bool, c Config) {
+	page := c.failurePage
+	if ok {
+		page = c.successPage
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if page == nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		page = []byte("Authentication failed. You may close this window.\n")
+		if ok {
+			page = []byte("Authentication succeeded. You may close this window.\n")
+		}
+	} else {
+		// Custom pages may use inline styles and data: images only: no scripts, forms or network fetches.
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(page)))
+	w.Write(page)
+}
+
+func verify(ctx context.Context, c Config, provider *oidc.Provider, oauth *oauth2.Config, cb callback, verifier, nonce string) (*Result, error) {
 	if cb.err != nil {
 		return nil, cb.err
 	}

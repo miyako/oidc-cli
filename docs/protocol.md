@@ -29,6 +29,22 @@ No token or credential cache is written to disk.
 | `allow_insecure_loopback_http` | boolean | `false`; explicitly permits HTTP issuer and provider endpoints **only for numeric loopback IPs**, for local testing |
 | `include_tokens` | boolean | `false`; explicit sensitive output described below |
 | `parent_pid` | integer | `0` disables process monitoring; otherwise accessible live PID 1–2147483647 |
+| `success_html` | string | Unset; inline HTML page shown in the browser after a verified login. Empty selects the default |
+| `success_html_file` | string | Unset; absolute path to an HTML file used like `success_html`; mutually exclusive with it |
+| `failure_html` | string | Unset; inline HTML page shown in the browser after a failed, cancelled or expired attempt. Empty selects the default |
+| `failure_html_file` | string | Unset; absolute path to an HTML file used like `failure_html`; mutually exclusive with it |
+
+Custom result pages are static: each must be UTF-8 of at most 65,536 bytes
+(inline values also count toward the stdin limit), and page files must be
+nonempty regular files. Files are read once during validation; an unreadable or
+invalid file fails with `invalid_input` (the message never includes the path).
+The CLI never inserts tokens, codes, identities or provider error text into a
+page. Custom pages are served as `text/html; charset=utf-8` with
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`:
+inline `<style>` and `data:` images work, but scripts, forms and external
+stylesheets, fonts or images are blocked. Without a custom page the browser
+receives a plain-text "Authentication succeeded/failed. You may close this
+window." message. Page content is configuration, never accepted in argv.
 
 Issuer and client registration are application-controlled trust configuration.
 HTTPS endpoints retain normal OS CA verification. Discovery issuer matching is
@@ -100,8 +116,12 @@ the response `iss` must match the configured issuer. Invalid state, malformed or
 ambiguous queries, unrelated paths, wrong methods and wrong response issuers
 receive HTTP errors **without consuming** the pending attempt. A structurally
 valid matching response consumes the attempt once; a code exchange/verification
-failure is final (no automatic retry). The browser response says only that the
-response was received, not that verification succeeded.
+failure is final (no automatic retry). The browser response to that callback is
+held until code exchange and ID-token verification finish (bounded by the overall
+deadline), then shows the success or failure page. The success page appears only
+when the attempt produced a verified identity; it is a display, not proof of
+login to any other party. In the rare case the deadline/cancellation gate fires
+after the page is chosen, stdout remains authoritative.
 
 The listener is exclusively bound before opening the browser, never to all
 interfaces. Each attempt has 256-bit cryptographically random state, nonce and

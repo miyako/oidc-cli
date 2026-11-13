@@ -39,6 +39,20 @@ Success (one UTF-8 JSON object, newline terminated):
 {"protocol_version":1,"ok":true,"identity":{"issuer":"https://id.example.com/realms/example","subject":"opaque-subject"}}
 ```
 
+After the callback, the browser tab shows a plain-text success or failure
+message once verification finishes. To show your own pages, add inline HTML or
+absolute HTML file paths to the stdin configuration:
+
+```json
+{"protocol_version":1,"issuer":"https://id.example.com/realms/example","client_id":"desktop",
+ "success_html":"<h1>Signed in</h1><p>Return to the application.</p>",
+ "failure_html_file":"/Applications/MyApp.app/Contents/Resources/login-failed.html"}
+```
+
+Use `success_html` or `success_html_file`, and `failure_html` or
+`failure_html_file` (at most 64 KiB UTF-8 each). Pages are static: inline styles
+and `data:` images are allowed; scripts and external resources are blocked.
+
 Failure has `ok:false`, an `error` object, and a nonzero process exit status.
 Stdout is exclusively protocol output. Configuration is read from stdin to EOF;
 never put tokens or credentials in command arguments. One invocation performs
